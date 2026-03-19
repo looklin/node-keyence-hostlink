@@ -1,0 +1,42 @@
+{
+  "name": "node-keyence-hostlink",
+  "version": "1.0.0",
+  "description": "Node.js Keyence PLC Host Link Protocol Library",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "keyence",
+    "plc",
+    "host-link",
+    "node",
+    "tcp"
+  ],
+  "author": "Link Lin",
+  "license": "MIT",
+  "type": "commonjs",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/locomo/node-keyence-hostlink.git "
+  },
+  "bugs": {
+    "url": "https://github.com/locomo/node-keyence-hostlink/issues "
+  },
+  "homepage": "https://github.com/locomo/node-keyence-hostlink#readme ",
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^5.9.3"
+  }
+}
