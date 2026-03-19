@@ -29,12 +29,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/locomo/node-keyence-hostlink.git "
+    "url": "https://github.com/looklin/node-keyence-hostlink"
   },
   "bugs": {
-    "url": "https://github.com/locomo/node-keyence-hostlink/issues "
+    "url": "https://github.com/looklin/node-keyence-hostlink/issues"
   },
-  "homepage": "https://github.com/locomo/node-keyence-hostlink#readme ",
+  "homepage": "https://github.com/looklin/node-keyence-hostlink#readme",  
   "devDependencies": {
     "@types/node": "^25.5.0",
     "typescript": "^5.9.3"
