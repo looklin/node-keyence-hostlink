@@ -13,7 +13,7 @@
 
 const { KeyencePLC, KeyenceError, TimeoutError } = require('node-keyence-hostlink');
 
-const HOST = process.argv[2] || '192.168.0.10';
+const HOST = '127.0.0.1';
 const PORT = parseInt(process.argv[3] || '8501', 10);
 
 async function main() {
@@ -62,8 +62,8 @@ async function main() {
         console.log(`DM200~DM202 =`, dm200);  // ['10', '20', '30']
 
         // Read with data type suffix (passed directly to PLC)
-        const dm100L = await plc.read('DM100.L');
-        console.log(`DM100.L = ${dm100L}`);
+        const dm100L = await plc.readUInt32('DM100');
+        console.log(`DM100.L (readUInt32) = ${dm100L}`);
 
         // ─── 5. Typed Operations (Int16, Int32, String) ──────────
         console.log('\n--- Typed Operations ---');
@@ -113,13 +113,15 @@ async function main() {
         // ─── 7. Timer / Counter (Double Word Devices) ────────────
         console.log('\n--- Timer / Counter Operations ---');
 
-        await plc.write('TC10', 50000);
-        const tc10 = await plc.read('TC10');
-        console.log(`TC10 = ${tc10}`);  // "50000"
+        // Use writeUInt32 for native 32-bit devices (TC, CC, TS, CS)
+        await plc.writeUInt32('TC10', 50000);
+        const tc10 = await plc.readUInt32('TC10');
+        console.log(`TC10 = ${tc10}`);  // 50000
 
-        await plc.writeMulti('TC20', [1000, 2000]);
-        const tc20 = await plc.readMulti('TC20', 2);
-        console.log(`TC20~TC21 =`, tc20);  // ['1000', '2000']
+        await plc.writeUInt32('TC20', 1000);
+        await plc.writeUInt32('TC21', 2000);
+        const tc20_21 = await plc.readMulti('TC20', 2);
+        console.log(`TC20~TC21 =`, tc20_21);
 
         console.log('\n✅ All operations completed successfully!');
 
