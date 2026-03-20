@@ -13,7 +13,7 @@
 
 const { KeyencePLC, KeyenceError, TimeoutError } = require('node-keyence-hostlink');
 
-const HOST = '127.0.0.1';
+const HOST = process.argv[2] || '127.0.0.1';
 const PORT = parseInt(process.argv[3] || '8501', 10);
 
 async function main() {
