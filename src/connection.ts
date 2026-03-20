@@ -79,19 +79,37 @@ export class Connection extends EventEmitter {
 
     private processBuffer(): void {
         let index: number;
-        while ((index = this.buffer.indexOf('\r\n')) !== -1) {
-            const response = this.buffer.substring(0, index);
-            this.buffer = this.buffer.substring(index + 2);
+        // Host Link protocol responses can end with \r\n or just \r.
+        // We handle both, preferring \r\n first to avoid leaving a trailing \n.
+        while (true) {
+            const indexCRLF = this.buffer.indexOf('\r\n');
+            const indexCR = this.buffer.indexOf('\r');
+            
+            if (indexCRLF !== -1 && (indexCR === -1 || indexCRLF <= indexCR)) {
+                index = indexCRLF;
+                const response = this.buffer.substring(0, index);
+                this.buffer = this.buffer.substring(index + 2);
+                this.resolveNext(response);
+            } else if (indexCR !== -1) {
+                index = indexCR;
+                const response = this.buffer.substring(0, index);
+                this.buffer = this.buffer.substring(index + 1);
+                this.resolveNext(response);
+            } else {
+                break;
+            }
+        }
+    }
 
-            if (this.queue.length > 0) {
-                const req = this.queue.shift()!;
-                clearTimeout(req.timer);
+    private resolveNext(response: string): void {
+        if (this.queue.length > 0) {
+            const req = this.queue.shift()!;
+            clearTimeout(req.timer);
 
-                if (/^E\d+$/.test(response)) {
-                    req.reject(new KeyenceError(response, req.command));
-                } else {
-                    req.resolve(response);
-                }
+            if (/^E\d+$/.test(response)) {
+                req.reject(new KeyenceError(response, req.command));
+            } else {
+                req.resolve(response);
             }
         }
     }
