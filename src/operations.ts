@@ -1,5 +1,5 @@
 import { Connection } from './connection';
-import { stripSuffix } from './device';
+import { stripSuffix, isNative32Bit } from './device';
 
 /**
  * Word (16-bit register) read/write operations.
@@ -21,7 +21,9 @@ export class WordOperations {
 
     /** Write a value to a single device. */
     async write(device: string, value: string | number): Promise<boolean> {
-        const res = await this.conn.sendCommand(`WR ${device} ${value}`);
+        const cmd = isNative32Bit(device) ? 'WRS' : 'WR';
+        const arg = isNative32Bit(device) ? '1 ' : '';
+        const res = await this.conn.sendCommand(`${cmd} ${device} ${arg}${value}`);
         return res === 'OK';
     }
 
@@ -109,6 +111,10 @@ export class TypedOperations {
 
     /** Read a 32-bit Unsigned Integer (Double Word). */
     async readUInt32(device: string): Promise<number> {
+        if (isNative32Bit(device)) {
+            const res = await this.word.read(device);
+            return parseInt(res, 10);
+        }
         const words = await this.word.readMulti(device, 2);
         const buf = Buffer.alloc(4);
         buf.writeUInt16LE(parseInt(words[0], 10), 0);
@@ -118,6 +124,12 @@ export class TypedOperations {
 
     /** Read a 32-bit Signed Integer (Double Word). */
     async readInt32(device: string): Promise<number> {
+        if (isNative32Bit(device)) {
+            const raw = await this.readUInt32(device);
+            const buf = Buffer.alloc(4);
+            buf.writeUInt32LE(raw);
+            return buf.readInt32LE(0);
+        }
         const words = await this.word.readMulti(device, 2);
         const buf = Buffer.alloc(4);
         buf.writeUInt16LE(parseInt(words[0], 10), 0);
@@ -127,6 +139,9 @@ export class TypedOperations {
 
     /** Write a 32-bit Unsigned Integer (Double Word). */
     async writeUInt32(device: string, value: number): Promise<boolean> {
+        if (isNative32Bit(device)) {
+            return await this.word.write(device, value);
+        }
         const buf = Buffer.alloc(4);
         buf.writeUInt32LE(value);
         return await this.word.writeMulti(device, [buf.readUInt16LE(0), buf.readUInt16LE(2)]);
@@ -134,6 +149,11 @@ export class TypedOperations {
 
     /** Write a 32-bit Signed Integer (Double Word). */
     async writeInt32(device: string, value: number): Promise<boolean> {
+        if (isNative32Bit(device)) {
+            const buf = Buffer.alloc(4);
+            buf.writeInt32LE(value);
+            return await this.word.write(device, buf.readUInt32LE(0));
+        }
         const buf = Buffer.alloc(4);
         buf.writeInt32LE(value);
         return await this.word.writeMulti(device, [buf.readUInt16LE(0), buf.readUInt16LE(2)]);
