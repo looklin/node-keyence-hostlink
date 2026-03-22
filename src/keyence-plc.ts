@@ -3,13 +3,13 @@ import { WordOperations, BitOperations, TypedOperations } from './operations';
 import type { KeyenceOptions, KeyenceEvents } from './types';
 
 /**
- * Main class for communicating with Keyence PLCs via Host Link Protocol.
+ * 通过 Host Link Protocol (上位链路协议) 与基恩士 PLC 通信的主类。
  *
- * Provides a unified API that delegates to specialized modules:
- * - Connection: TCP lifecycle, reconnect, command queue
- * - WordOperations: Single/multi word read/write
- * - BitOperations: Boolean (bit) read/write
- * - TypedOperations: Int16/32, UInt16/32, String read/write
+ * 提供一个统一的 API，该 API 将工作委托给各个专用模块：
+ * - Connection: TCP 生命周期，重连机制，指令队列
+ * - WordOperations: 单字/多字读写
+ * - BitOperations: 布尔 (位) 读写
+ * - TypedOperations: Int16/32, UInt16/32, 字符串读写
  */
 export class KeyencePLC {
     private readonly conn: Connection;
@@ -24,153 +24,165 @@ export class KeyencePLC {
             options.timeout ?? 5000,
             options.autoReconnect !== false,
             options.reconnectInterval ?? 3000,
+            options.noDelay !== false,
+            options.keepAlive !== false,
+            options.keepAliveInitialDelay ?? 1000,
+            options.maxPendingCommands ?? 128,
             options.station,
         );
 
-        this.wordOps = new WordOperations(this.conn);
-        this.bitOps = new BitOperations(this.conn);
+        this.wordOps = new WordOperations(
+            this.conn,
+            options.maxReadPoints ?? 64,
+            options.maxWritePoints ?? 64,
+        );
+        this.bitOps = new BitOperations(
+            this.conn,
+            options.maxReadPoints ?? 64,
+            options.maxWritePoints ?? 64,
+        );
         this.typedOps = new TypedOperations(this.wordOps);
     }
 
-    // ─── Event Forwarding ────────────────────────────────────────
+    // ─── 事件转发 ────────────────────────────────────────
 
-    /** Register an event listener. */
+    /** 注册一个事件监听器。 */
     on<K extends keyof KeyenceEvents>(event: K, listener: KeyenceEvents[K]): this {
         this.conn.on(event, listener as (...args: unknown[]) => void);
         return this;
     }
 
-    /** Register a one-time event listener. */
+    /** 注册一个一次性事件监听器。 */
     once<K extends keyof KeyenceEvents>(event: K, listener: KeyenceEvents[K]): this {
         this.conn.once(event, listener as (...args: unknown[]) => void);
         return this;
     }
 
-    /** Remove an event listener. */
+    /** 移除事件监听器。 */
     off<K extends keyof KeyenceEvents>(event: K, listener: KeyenceEvents[K]): this {
         this.conn.off(event, listener as (...args: unknown[]) => void);
         return this;
     }
 
-    /** Emit an event. */
+    /** 触发事件。 */
     emit<K extends keyof KeyenceEvents>(event: K, ...args: Parameters<KeyenceEvents[K]>): boolean {
         return this.conn.emit(event, ...args);
     }
 
-    // ─── Connection ──────────────────────────────────────────────
+    // ─── 连接 ──────────────────────────────────────────────
 
-    /** Establishes TCP connection and initializes the session. */
+    /** 建立 TCP 连接并初始化会话。 */
     connect(): Promise<void> {
         return this.conn.connect();
     }
 
-    /** Disconnects from the PLC safely. */
+    /** 安全地断开与 PLC 的连接。 */
     disconnect(): Promise<void> {
         return this.conn.disconnect();
     }
 
-    /** Force reconnect (disconnect then connect). */
+    /** 强制重连 (断开连接然后重新连接)。 */
     reconnect(): Promise<void> {
         return this.conn.reconnect();
     }
 
-    /** Check if currently connected to PLC. */
+    /** 检查当前是否已连接到 PLC。 */
     isConnected(): boolean {
         return this.conn.isConnected();
     }
 
-    // ─── Word Read / Write ───────────────────────────────────────
+    // ─── 字 (Word) 读 / 写 ───────────────────────────────────────
 
-    /** Read a single device value as a string. */
+    /** 读取单个设备值并作为字符串返回。 */
     read(device: string): Promise<string> {
         return this.wordOps.read(device);
     }
 
-    /** Read multiple consecutive device values. */
+    /** 读取多个连续设备的值。 */
     readMulti(device: string, count: number): Promise<string[]> {
         return this.wordOps.readMulti(device, count);
     }
 
-    /** Write a value to a single device. */
+    /** 向单个设备写入一个值。 */
     write(device: string, value: string | number): Promise<boolean> {
         return this.wordOps.write(device, value);
     }
 
-    /** Write multiple values to consecutive devices. */
+    /** 向连续的设备写入多个值。 */
     writeMulti(device: string, values: (string | number)[]): Promise<boolean> {
         return this.wordOps.writeMulti(device, values);
     }
 
-    // ─── Bit / Boolean Read / Write ──────────────────────────────
+    // ─── 位 / 布尔 读 / 写 ──────────────────────────────
 
-    /** Read a single boolean (bit) value. */
+    /** 读取单个布尔 (位) 值。 */
     readBool(device: string): Promise<boolean> {
         return this.bitOps.readBool(device);
     }
 
-    /** Read multiple consecutive boolean (bit) values. */
+    /** 读取多个连续的布尔 (位) 值。 */
     readBoolMulti(device: string, count: number): Promise<boolean[]> {
         return this.bitOps.readBoolMulti(device, count);
     }
 
-    /** Write a single boolean (bit) value using ST/RS commands. */
+    /** 使用 ST/RS 指令写入单个布尔 (位) 值。 */
     writeBool(device: string, value: boolean): Promise<boolean> {
         return this.bitOps.writeBool(device, value);
     }
 
-    /** Write multiple consecutive boolean (bit) values. */
+    /** 连续写入多个布尔 (位) 值。 */
     writeBoolMulti(device: string, values: boolean[]): Promise<boolean> {
         return this.bitOps.writeBoolMulti(device, values);
     }
 
-    // ─── Typed Word Read / Write ─────────────────────────────────
+    // ─── 带类型的字读 / 写 ─────────────────────────────────
 
-    /** Read a 16-bit Unsigned Integer. */
+    /** 读取 16 位无符号整数。 */
     readUInt16(device: string): Promise<number> {
         return this.typedOps.readUInt16(device);
     }
 
-    /** Read a 16-bit Signed Integer. */
+    /** 读取 16 位有符号整数。 */
     readInt16(device: string): Promise<number> {
         return this.typedOps.readInt16(device);
     }
 
-    /** Read a 32-bit Unsigned Integer (Double Word). */
+    /** 读取 32 位无符号整数 (双字)。 */
     readUInt32(device: string): Promise<number> {
         return this.typedOps.readUInt32(device);
     }
 
-    /** Read a 32-bit Signed Integer (Double Word). */
+    /** 读取 32 位有符号整数 (双字)。 */
     readInt32(device: string): Promise<number> {
         return this.typedOps.readInt32(device);
     }
 
-    /** Write a 16-bit Unsigned Integer. */
+    /** 写入 16 位无符号整数。 */
     writeUInt16(device: string, value: number): Promise<boolean> {
         return this.typedOps.writeUInt16(device, value);
     }
 
-    /** Write a 16-bit Signed Integer. */
+    /** 写入 16 位有符号整数。 */
     writeInt16(device: string, value: number): Promise<boolean> {
         return this.typedOps.writeInt16(device, value);
     }
 
-    /** Write a 32-bit Unsigned Integer (Double Word). */
+    /** 写入 32 位无符号整数 (双字)。 */
     writeUInt32(device: string, value: number): Promise<boolean> {
         return this.typedOps.writeUInt32(device, value);
     }
 
-    /** Write a 32-bit Signed Integer (Double Word). */
+    /** 写入 32 位有符号整数 (双字)。 */
     writeInt32(device: string, value: number): Promise<boolean> {
         return this.typedOps.writeInt32(device, value);
     }
 
-    /** Read a string from consecutive word devices. */
+    /** 从连续字设备中读取字符串。 */
     readString(device: string, length: number): Promise<string> {
         return this.typedOps.readString(device, length);
     }
 
-    /** Write a string to consecutive word devices. */
+    /** 将字符串写入连续字设备。 */
     writeString(device: string, text: string): Promise<boolean> {
         return this.typedOps.writeString(device, text);
     }

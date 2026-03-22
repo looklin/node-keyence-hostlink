@@ -1,16 +1,16 @@
 import { Socket } from 'net';
 import { EventEmitter } from 'events';
 import type { QueuedCommand } from './types';
-import { KeyenceError, TimeoutError } from './errors';
+import { ConnectionError, KeyenceError, TimeoutError } from './errors';
 
 /**
- * Manages the TCP socket connection and command queue for Keyence PLC communication.
+ * 管理与基恩士 PLC 通信的 TCP 套接字连接和指令队列。
  *
- * Responsibilities:
- * - TCP socket lifecycle (connect, disconnect, destroy)
- * - Auto-reconnect logic
- * - Command queuing with timeout
- * - Response buffer parsing
+ * 职责:
+ * - TCP 套接字生命周期 (连接，断开，销毁)
+ * - 自动重连逻辑
+ * - 带有超时机制的指令队列
+ * - 响应 buffer 解析
  */
 export class Connection extends EventEmitter {
     private socket: Socket;
@@ -20,10 +20,15 @@ export class Connection extends EventEmitter {
     private readonly station?: number;
     private readonly autoReconnect: boolean;
     private readonly reconnectInterval: number;
+    private readonly noDelay: boolean;
+    private readonly keepAlive: boolean;
+    private readonly keepAliveInitialDelay: number;
+    private readonly maxPendingCommands: number;
 
     private connected: boolean = false;
     private buffer: string = '';
     private queue: QueuedCommand[] = [];
+    private activeCommand?: QueuedCommand;
 
     private reconnectTimer?: NodeJS.Timeout;
     private reconnectAttempts: number = 0;
@@ -36,6 +41,10 @@ export class Connection extends EventEmitter {
         timeout: number,
         autoReconnect: boolean,
         reconnectInterval: number,
+        noDelay: boolean,
+        keepAlive: boolean,
+        keepAliveInitialDelay: number,
+        maxPendingCommands: number,
         station?: number,
     ) {
         super();
@@ -46,10 +55,20 @@ export class Connection extends EventEmitter {
         this.autoReconnect = autoReconnect;
         this.reconnectInterval = reconnectInterval;
         this.socket = new Socket();
+        this.noDelay = noDelay;
+        this.keepAlive = keepAlive;
+        this.keepAliveInitialDelay = keepAliveInitialDelay;
+        this.maxPendingCommands = maxPendingCommands;
+        this.configureSocket(this.socket);
         this.bindSocketEvents(this.socket);
     }
 
-    // ─── Socket Event Handling ───────────────────────────────────
+    // ─── Socket 事件处理 ───────────────────────────────────
+
+    private configureSocket(socket: Socket): void {
+        socket.setNoDelay(this.noDelay);
+        socket.setKeepAlive(this.keepAlive, this.keepAliveInitialDelay);
+    }
 
     private bindSocketEvents(socket: Socket): void {
         socket.on('data', (data) => {
@@ -65,7 +84,8 @@ export class Connection extends EventEmitter {
             const wasConnected = this.connected;
             this.connected = false;
             this.isConnecting = false;
-            this.rejectAllPending(new Error('Socket closed'));
+            this.buffer = '';
+            this.rejectActiveAndPending(new ConnectionError('套接字已关闭'));
 
             if (wasConnected) {
                 this.emit('disconnected');
@@ -79,8 +99,8 @@ export class Connection extends EventEmitter {
 
     private processBuffer(): void {
         let index: number;
-        // Host Link protocol responses can end with \r\n or just \r.
-        // We handle both, preferring \r\n first to avoid leaving a trailing \n.
+        // Host Link 协议的响应可以以 \r\n 结尾，或者仅以 \r 结尾。
+        // 我们同时处理这两种情况，优先处理 \r\n 以避免留下尾随的 \n。
         while (true) {
             const indexCRLF = this.buffer.indexOf('\r\n');
             const indexCR = this.buffer.indexOf('\r');
@@ -102,29 +122,75 @@ export class Connection extends EventEmitter {
     }
 
     private resolveNext(response: string): void {
-        if (this.queue.length > 0) {
-            const req = this.queue.shift()!;
-            clearTimeout(req.timer);
-
-            if (/^E\d+$/.test(response)) {
-                req.reject(new KeyenceError(response, req.command));
-            } else {
-                req.resolve(response);
-            }
+        const req = this.activeCommand;
+        if (!req) {
+            this.emit('error', new ConnectionError(`收到意外的 PLC 响应且没有活动指令: ${response}`));
+            return;
         }
+
+        this.activeCommand = undefined;
+        if (req.timer) {
+            clearTimeout(req.timer);
+        }
+
+        if (/^E\d+$/.test(response)) {
+            req.reject(new KeyenceError(response, req.command));
+        } else {
+            req.resolve(response);
+        }
+
+        this.flushQueue();
     }
 
     private rejectAllPending(err: Error): void {
         while (this.queue.length > 0) {
             const req = this.queue.shift();
             if (req) {
-                clearTimeout(req.timer);
+                if (req.timer) {
+                    clearTimeout(req.timer);
+                }
                 req.reject(err);
             }
         }
     }
 
-    // ─── Reconnect Logic ─────────────────────────────────────────
+    private rejectActiveAndPending(err: Error): void {
+        const active = this.activeCommand;
+        this.activeCommand = undefined;
+
+        if (active) {
+            if (active.timer) {
+                clearTimeout(active.timer);
+            }
+            active.reject(err);
+        }
+
+        this.rejectAllPending(err);
+    }
+
+    private flushQueue(): void {
+        if (this.activeCommand || this.queue.length === 0 || this.socket.destroyed) {
+            return;
+        }
+
+        const req = this.queue.shift()!;
+        req.timer = setTimeout(() => {
+            if (this.activeCommand !== req) {
+                return;
+            }
+
+            this.activeCommand = undefined;
+            req.reject(new TimeoutError(req.command));
+
+            // 超时后，我们无法再信任请求/响应的对齐状态。
+            this.socket.destroy();
+        }, this.timeout);
+
+        this.activeCommand = req;
+        this.socket.write(req.command + '\r');
+    }
+
+    // ─── 重连逻辑 ─────────────────────────────────────────
 
     private scheduleReconnect(): void {
         if (this.reconnectTimer || this.isManualDisconnect) {
@@ -139,7 +205,7 @@ export class Connection extends EventEmitter {
             try {
                 await this.connect();
             } catch {
-                // Will trigger another reconnect via 'close' event
+                // 将通过 'close' 事件触发下一次重连
             }
         }, this.reconnectInterval);
     }
@@ -151,10 +217,10 @@ export class Connection extends EventEmitter {
         }
     }
 
-    // ─── Public Connection API ───────────────────────────────────
+    // ─── 公共连接 API ───────────────────────────────────
 
     /**
-     * Establishes TCP connection and initializes the Host Link session (CR command).
+     * 建立 TCP 连接并初始化 Host Link 会话（通过 CR 指令）。
      */
     public connect(): Promise<void> {
         if (this.connected) {
@@ -162,15 +228,16 @@ export class Connection extends EventEmitter {
         }
 
         if (this.isConnecting) {
-            return Promise.reject(new Error('Connection already in progress'));
+            return Promise.reject(new Error('已经正在连接中'));
         }
 
         this.isConnecting = true;
         this.isManualDisconnect = false;
 
-        // If socket was destroyed, create a new one first
+        // 如果套接字已销毁，首先创建一个新的
         if (this.socket.destroyed) {
             this.socket = new Socket();
+            this.configureSocket(this.socket);
             this.bindSocketEvents(this.socket);
         }
 
@@ -207,7 +274,7 @@ export class Connection extends EventEmitter {
     }
 
     /**
-     * Disconnects from the PLC safely.
+     * 安全地断开与 PLC 的连接。
      */
     public async disconnect(): Promise<void> {
         this.isManualDisconnect = true;
@@ -217,21 +284,21 @@ export class Connection extends EventEmitter {
             try {
                 await this.sendCommand('CQ');
             } catch {
-                // Ignore errors on disconnect
+                // 忽略断开连接时的错误
             }
             this.connected = false;
         }
 
         this.socket.destroy();
 
-        // Only emit if we haven't already emitted via the close handler
-        // (socket.destroy triggers 'close' which emits 'disconnected' if wasConnected)
-        // Since we set connected=false before destroy, the close handler won't emit again.
+        // 仅在我们还没有通过 close 处理程序触发时发出事件
+        // (socket.destroy 会触发 'close'，如果 wasConnected，就会发出 'disconnected')
+        // 由于我们在 destroy 之前将 connected 设置为 false，因此 close 处理程序不会再次发出。
         this.emit('disconnected');
     }
 
     /**
-     * Force reconnect (destroy current connection and reconnect).
+     * 强制重连 (销毁当前连接并重新连接)。
      */
     public async reconnect(): Promise<void> {
         this.isManualDisconnect = false;
@@ -246,35 +313,35 @@ export class Connection extends EventEmitter {
     }
 
     /**
-     * Check if currently connected to PLC.
+     * 检查当前是否已连接到 PLC。
      */
     public isConnected(): boolean {
         return this.connected;
     }
 
-    // ─── Command Interface ───────────────────────────────────────
+    // ─── 指令接口 ───────────────────────────────────────
 
     /**
-     * Send an ASCII command to the PLC and return the response.
-     * @param command - The raw command string (without CR/LF terminator)
-     * @param isInit  - If true, skip the connection check (used for CR init command)
+     * 发送一条 ASCII 指令给 PLC 并返回响应。
+     * @param command - 原始指令字符串 (不包含 CR/LF 终止符)
+     * @param isInit  - 如果为 true，则跳过连接检查 (用于 CR 初始指令)
      */
     public sendCommand(command: string, isInit: boolean = false): Promise<string> {
         if (!this.connected && !isInit) {
-            return Promise.reject(new Error('Not connected to PLC'));
+            return Promise.reject(new ConnectionError('未连接到 PLC'));
+        }
+
+        if (this.queue.length >= this.maxPendingCommands) {
+            return Promise.reject(
+                new ConnectionError(
+                    `PLC 指令队列超出限制 (${this.maxPendingCommands})`,
+                ),
+            );
         }
 
         return new Promise((resolve, reject) => {
-            const timer = setTimeout(() => {
-                const index = this.queue.findIndex(q => q.timer === timer);
-                if (index !== -1) {
-                    const req = this.queue.splice(index, 1)[0];
-                    req.reject(new TimeoutError(req.command));
-                }
-            }, this.timeout);
-
-            this.queue.push({ command, resolve, reject, timer });
-            this.socket.write(command + '\r');
+            this.queue.push({ command, resolve, reject });
+            this.flushQueue();
         });
     }
 }
