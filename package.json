@@ -1,6 +1,6 @@
 {
   "name": "node-keyence-hostlink",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Node.js Keyence PLC Host Link Protocol Library",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -34,7 +34,7 @@
   "bugs": {
     "url": "https://github.com/looklin/node-keyence-hostlink/issues"
   },
-  "homepage": "https://github.com/looklin/node-keyence-hostlink#readme",  
+  "homepage": "https://github.com/looklin/node-keyence-hostlink#readme",
   "devDependencies": {
     "@types/node": "^25.5.0",
     "typescript": "^5.9.3"

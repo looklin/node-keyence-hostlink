@@ -212,6 +212,11 @@ src/
 └── keyence-plc.ts    # 主要的 KeyencePLC 类 (上述模块的组合)
 ```
 
+## 联系方式
+
+- 邮箱: linnanly@gmail.com
+- 微信: linnan-wx
+
 ## 许可证
 
 MIT
